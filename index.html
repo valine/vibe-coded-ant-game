@@ -13,21 +13,29 @@
       overflow: hidden; /* prevent scroll when using arrows */
     }
     #ui { position: fixed; inset: 0; pointer-events: none; display: block; }
-    #hud { margin: 12px; padding: 8px 12px; background: rgba(0,0,0,.35); color: #fff; border-radius: 10px; width: max-content; backdrop-filter: blur(4px); }
-    #help { position: fixed; top: 12px; right: 12px; padding: 8px 12px; background: rgba(255,255,255,.6); color: #222; border-radius: 10px; width: max-content; z-index: 5; }
+    #hud { position: static; z-index: auto; margin: 0; padding: 8px 12px; background: rgba(0,0,0,.35); color: #fff; border-radius: 10px; width: max-content; backdrop-filter: blur(4px); }
+    #help { position: static; margin: 0; padding: 8px 12px; background: rgba(255,255,255,.6); color: #222; border-radius: 10px; width: max-content; display: inline-block; }
     #win { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,.6); color: #fff; padding: 18px 22px; border-radius: 14px; font-size: 24px; display:none; text-align:center;}
     canvas { display: block; width: 100vw; height: 100vh; }
     a.btn { pointer-events: auto; display:inline-block; margin-left:8px; padding:4px 8px; border-radius:8px; background:#222; color:#fff; text-decoration:none; font-weight:600; }
   .touch{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);display:none;gap:14px;pointer-events:auto;}
     .touch button{width:64px;height:64px;border-radius:50%;border:none;background:rgba(0,0,0,.5);color:#fff;font-size:24px;box-shadow:0 4px 12px rgba(0,0,0,.25);backdrop-filter:blur(6px)}
     @media (pointer: coarse){.touch{display:flex}}
+  @media (max-width: 420px){
+      /* stack help below hud on very small screens */
+      #help{ top: 56px; right: 12px; }
+    }
+  #top { position: fixed; top: 12px; left: 12px; z-index: 6; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; pointer-events: none; }
+    #top #hud, #top #help { pointer-events: auto; }
   </style>
 </head>
 <body>
   <canvas id="game"></canvas>
   <div id="ui">
-    <div id="hud">🍎 Apples: <span id="score">0</span>/<span id="total">0</span> &nbsp; | &nbsp; 🐜 Ant x: <span id="antx">0</span></div>
+    <div id="top">
+      <div id="hud">🍎 Apples: <span id="score">0</span>/<span id="total">0</span> &nbsp; | &nbsp; 🐜 Ant x: <span id="antx">0</span></div>
     <div id="help">← → move &nbsp; • &nbsp; ↑ or Space to jump &nbsp; • &nbsp; R to restart &nbsp; • &nbsp; (mobile: ◀ ⤒ ▶) <a class="btn" href="#" id="reset">Reset</a></div>
+    </div>
     <div id="win">🎉 You collected all the apples!<br/>Press R to play again.</div>
     <div id="touch" class="touch">
       <button id="btn-left" aria-label="Move left">◀</button>
@@ -87,9 +95,7 @@
       if (!el) return;
       const on = (e)=>{ keys[key] = true; e.preventDefault(); };
       const off = (e)=>{ keys[key] = false; e.preventDefault(); };
-      el.addEventListener('touchstart', on, {passive:false});
-      el.addEventListener('touchend', off, {passive:false});
-      el.addEventListener('touchcancel', off, {passive:false});
+      
       el.addEventListener('mousedown', on);
       el.addEventListener('mouseup', off);
       el.addEventListener('mouseleave', off);
@@ -104,9 +110,63 @@
       const wrap = document.getElementById('touch');
       const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints>0);
       if (wrap) wrap.style.display = isTouch ? 'flex' : 'none';
+
+      // Mouse support on buttons
       bindButton(btnL(), 'left');
       bindButton(btnR(), 'right');
       bindButton(btnU(), 'up');
+
+      // Slide-to-jump (touch): allow a finger to slide from arrows to the jump button
+      if (wrap && isTouch){
+        const active = new Map(); // touchId -> key
+        const inRect = (el, x, y) => { if (!el) return false; const r = el.getBoundingClientRect(); return x>=r.left && x<=r.right && y>=r.top && y<=r.bottom; };
+        const keyAt = (x, y) => {
+          // Prioritize jump when overlapping
+          if (inRect(btnU(), x, y)) return 'up';
+          if (inRect(btnL(), x, y)) return 'left';
+          if (inRect(btnR(), x, y)) return 'right';
+          return null;
+        };
+        const press = (key)=>{ if (key) keys[key] = true; };
+        const release = (key)=>{ if (key) keys[key] = false; };
+
+        const handleStart = (e)=>{
+          for (const t of e.changedTouches){
+            const k = keyAt(t.clientX, t.clientY);
+            if (k){ active.set(t.identifier, k); press(k); }
+          }
+          e.preventDefault();
+        };
+        const handleMove = (e)=>{
+          for (const t of e.changedTouches){
+            const prev = active.get(t.identifier);
+            const k = keyAt(t.clientX, t.clientY);
+            if (k !== prev){
+              if (prev) release(prev);
+              if (k){
+                press(k);
+                active.set(t.identifier, k);
+              } else {
+                active.delete(t.identifier);
+              }
+            }
+          }
+          e.preventDefault();
+        };
+        const handleEnd = (e)=>{
+          for (const t of e.changedTouches){
+            const prev = active.get(t.identifier);
+            if (prev) release(prev);
+            active.delete(t.identifier);
+          }
+          e.preventDefault();
+        };
+
+        wrap.addEventListener('touchstart', handleStart, {passive:false});
+        wrap.addEventListener('touchmove',  handleMove,  {passive:false});
+        wrap.addEventListener('touchend',   handleEnd,   {passive:false});
+        wrap.addEventListener('touchcancel',handleEnd,   {passive:false});
+      }
     });
 
     // Entities
@@ -287,35 +347,35 @@
 
     // Physics & update
     let time = 0;
-    function update() {
-      time += 16.6667;
+    function update(dt, dtScale) {
+      time += dt;
       const gY = WORLD.groundY();
 
       // Horizontal movement with acceleration
-      const accel = 0.8;
+      const accel = 0.8 * dtScale;
       if (keys.left)  { ant.vx -= accel; ant.facing = -1; }
       if (keys.right) { ant.vx += accel; ant.facing =  1; }
       ant.vx = Math.max(-WORLD.maxSpeed, Math.min(WORLD.maxSpeed, ant.vx));
-      if (!keys.left && !keys.right) ant.vx *= WORLD.friction;
+      if (!keys.left && !keys.right) ant.vx *= Math.pow(WORLD.friction, dtScale);
 
       // Gravity
-      ant.vy += WORLD.gravity;
+      ant.vy += WORLD.gravity * dtScale;
 
       // Jump (Mario-like: coyote time + variable jump)
       if (ant.onGround && (keys.up) && ant.jumpCooldown <= 0) {
         ant.vy = -WORLD.jumpForce;
         ant.onGround = false;
-        ant.jumpCooldown = 10; // avoid auto-retrigger
+        ant.jumpCooldown = 10;
       }
-      ant.jumpCooldown = Math.max(0, ant.jumpCooldown - 1);
+      ant.jumpCooldown = Math.max(0, ant.jumpCooldown - dtScale);
 
       // Variable jump height: if player releases early, cut upward velocity
       // Mimics classic platformers
       if (!keys.up && ant.vy < -4) ant.vy = -4;
 
       // Integrate
-      ant.x += ant.vx;
-      ant.y += ant.vy;
+      ant.x += ant.vx * dtScale;
+      ant.y += ant.vy * dtScale;
 
       // World bounds
       ant.x = Math.max(20, Math.min(WORLD.width - 20, ant.x));
@@ -336,12 +396,12 @@
 
       // Camera follow
       const centerX = ant.x - innerWidth * 0.5 + 40 * ant.facing;
-      camera.x += (centerX - camera.x) * 0.06;
+      camera.x += (centerX - camera.x) * (0.06 * dtScale);
       camera.x = Math.max(0, Math.min(WORLD.width - innerWidth, camera.x));
 
       // Move clouds slowly
       for (const c of clouds) {
-        c.x += c.speed;
+        c.x += c.speed * dtScale;
         if (c.x - camera.x * 0.5 > WORLD.width + 200) c.x -= WORLD.width + 400;
       }
 
@@ -422,8 +482,13 @@
     }
 
     // Main loop
+    let last = performance.now();
     function loop(){
-      update();
+      const now = performance.now();
+      const dt = Math.min(40, now - last); // cap to avoid huge steps on tab switches
+      const dtScale = dt / 16.6667;
+      last = now;
+      update(dt, dtScale);
       render();
       requestAnimationFrame(loop);
     }
