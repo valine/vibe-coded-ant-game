@@ -14,10 +14,13 @@
     }
     #ui { position: fixed; inset: 0; pointer-events: none; display: block; }
     #hud { position: static; z-index: auto; margin: 0; padding: 8px 12px; background: rgba(0,0,0,.35); color: #fff; border-radius: 10px; width: max-content; backdrop-filter: blur(4px); }
-    #help { position: static; margin: 0; padding: 8px 12px; background: rgba(255,255,255,.6); color: #222; border-radius: 10px; width: max-content; display: inline-block; }
+    #help { position: static; margin: 0; padding: 8px 12px; background: rgba(255,255,255,.6); color: #222; border-radius: 10px; max-width: min(92vw, 520px); white-space: normal; word-break: break-word; display: inline-block; line-height: 1.2; }
     #win { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,.6); color: #fff; padding: 18px 22px; border-radius: 14px; font-size: 24px; display:none; text-align:center;}
     canvas { display: block; width: 100vw; height: 100vh; }
     a.btn { pointer-events: auto; display:inline-block; margin-left:8px; padding:4px 8px; border-radius:8px; background:#222; color:#fff; text-decoration:none; font-weight:600; }
+  @media (max-width: 480px){
+    #help .btn{ display:block; margin-left:0; margin-top:6px; width:max-content; }
+  }
   .touch{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);display:none;gap:14px;pointer-events:auto;}
     .touch button{width:64px;height:64px;border-radius:50%;border:none;background:rgba(0,0,0,.5);color:#fff;font-size:24px;box-shadow:0 4px 12px rgba(0,0,0,.25);backdrop-filter:blur(6px)}
     @media (pointer: coarse){.touch{display:flex}}
@@ -34,7 +37,7 @@
   <div id="ui">
     <div id="top">
       <div id="hud">🍎 Apples: <span id="score">0</span>/<span id="total">0</span> &nbsp; | &nbsp; 🐜 Ant x: <span id="antx">0</span></div>
-    <div id="help">← → move &nbsp; • &nbsp; ↑ or Space to jump &nbsp; • &nbsp; R to restart &nbsp; • &nbsp; (mobile: ◀ ⤒ ▶) <a class="btn" href="#" id="reset">Reset</a></div>
+    <div id="help">← → move • ↑ or Space to jump • R to restart • (mobile: ◀ ⤒ ▶) <a class="btn" href="#" id="reset">Reset</a></div>
     </div>
     <div id="win">🎉 You collected all the apples!<br/>Press R to play again.</div>
     <div id="touch" class="touch">
@@ -345,6 +348,15 @@
       }
     }
 
+    // Collision helper: circle (apple) vs. expanded ant rectangle (any visible part)
+    function circleRectHit(cx, cy, r, rx, ry, rw, rh){
+      const closestX = Math.max(rx, Math.min(cx, rx + rw));
+      const closestY = Math.max(ry, Math.min(cy, ry + rh));
+      const dx = cx - closestX;
+      const dy = cy - closestY;
+      return (dx*dx + dy*dy) <= r*r;
+    }
+
     // Physics & update
     let time = 0;
     function update(dt, dtScale) {
@@ -405,13 +417,30 @@
         if (c.x - camera.x * 0.5 > WORLD.width + 200) c.x -= WORLD.width + 400;
       }
 
-      // Collect apples (circle-rect approx with ant body)
+      // Collect apples — if any part of the ant touches the apple
+      // Compute a facing-corrected ant hitbox centered on the sprite's visual center
+      // Sprite (unflipped) rough local bounds from drawAnt():
+      //   X: [-24, +50]  → centerX ≈ +13, halfW ≈ 37
+      //   Y: [-10, +26]  → centerY ≈ +8 (then translated by -15 in draw), halfH ≈ 18
+      const centerXLocal = 13;
+      const halfW = 37;
+      const centerYLocal = 8 - 15; // account for translate(y - 15)
+      const halfH = 18;
+
       for (const a of apples) {
         if (a.collected) continue;
-        const dx = (ant.x + 20) - a.x;
-        const dy = (ant.y + ant.h/2) - a.y;
-        const rad = (a.r + 8); // slightly larger hitbox than the visual radius
-        if (dx*dx + dy*dy < rad*rad) {
+        const cx = a.x, cy = a.y; // world-space apple center
+        // Facing-aware sprite center in world space
+        const antCenterX = ant.x + (ant.facing === 1 ? -centerXLocal : centerXLocal);
+        const antCenterY = ant.y + centerYLocal;
+        // Inflate a bit to include legs and squash
+        const inflateX = 10, inflateY = 12;
+        const rx = antCenterX - (halfW + inflateX);
+        const ry = antCenterY - (halfH + inflateY);
+        const rw = (halfW + inflateX) * 2;
+        const rh = (halfH + inflateY) * 2;
+        const r  = a.r + 8; // small boost to apple radius for feel
+        if (circleRectHit(cx, cy, r, rx, ry, rw, rh)) {
           a.collected = true; collected += 1; ant.squash = 0.3;
         }
       }
