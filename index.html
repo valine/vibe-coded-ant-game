@@ -13,23 +13,28 @@
       overflow: hidden; /* prevent scroll when using arrows */
     }
     #ui { position: fixed; inset: 0; pointer-events: none; display: block; }
-    #hud { position: static; z-index: auto; margin: 0; padding: 8px 12px; background: rgba(0,0,0,.35); color: #fff; border-radius: 10px; width: max-content; backdrop-filter: blur(4px); }
-    #help { position: static; margin: 0; padding: 8px 12px; background: rgba(255,255,255,.6); color: #222; border-radius: 10px; max-width: min(92vw, 520px); white-space: normal; word-break: break-word; display: inline-block; line-height: 1.2; }
+
+    /* Top-left stack: counter then controls */
+    #top { position: fixed; top: 12px; left: 12px; z-index: 6; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; pointer-events: none; }
+    #hud { position: static; margin: 0; padding: 8px 12px; background: rgba(0,0,0,.35); color: #fff; border-radius: 10px; width: max-content; backdrop-filter: blur(4px); pointer-events: auto; }
+    #help { position: static; margin: 0; padding: 8px 12px; background: rgba(255,255,255,.6); color: #222; border-radius: 10px; max-width: min(92vw, 520px); white-space: normal; word-break: break-word; display: inline-block; line-height: 1.2; pointer-events: auto; }
     #win { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,.6); color: #fff; padding: 18px 22px; border-radius: 14px; font-size: 24px; display:none; text-align:center;}
+
     canvas { display: block; width: 100vw; height: 100vh; }
+
     a.btn { pointer-events: auto; display:inline-block; margin-left:8px; padding:4px 8px; border-radius:8px; background:#222; color:#fff; text-decoration:none; font-weight:600; }
-  @media (max-width: 480px){
-    #help .btn{ display:block; margin-left:0; margin-top:6px; width:max-content; }
-  }
-  .touch{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);display:none;gap:14px;pointer-events:auto;}
+    @media (max-width: 480px){
+      #help .btn{ display:block; margin-left:0; margin-top:6px; width:max-content; }
+    }
+
+    /* Touch controls */
+    .touch{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);display:none;gap:14px;pointer-events:auto;}
     .touch button{width:64px;height:64px;border-radius:50%;border:none;background:rgba(0,0,0,.5);color:#fff;font-size:24px;box-shadow:0 4px 12px rgba(0,0,0,.25);backdrop-filter:blur(6px)}
     @media (pointer: coarse){.touch{display:flex}}
-  @media (max-width: 420px){
-      /* stack help below hud on very small screens */
-      #help{ top: 56px; right: 12px; }
-    }
-  #top { position: fixed; top: 12px; left: 12px; z-index: 6; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; pointer-events: none; }
-    #top #hud, #top #help { pointer-events: auto; }
+
+    /* HN note styling */
+    .hn-note{ background:#f6f6ef; color:#000; border-left:4px solid #ff6600; padding:8px 12px; border-radius:8px; max-width:min(92vw,520px); line-height:1.25; pointer-events:auto; }
+    .hn-note .hn{ color:#ff6600; font-weight:700; }
   </style>
 </head>
 <body>
@@ -37,7 +42,8 @@
   <div id="ui">
     <div id="top">
       <div id="hud">🍎 Apples: <span id="score">0</span>/<span id="total">0</span> &nbsp; | &nbsp; 🐜 Ant x: <span id="antx">0</span></div>
-    <div id="help">← → move • ↑ or Space to jump • R to restart • (mobile: ◀ ⤒ ▶) <a class="btn" href="#" id="reset">Reset</a></div>
+      <div id="help">← → move • ↑ or Space to jump • R to restart • (mobile: ◀ ⤒ ▶) <a class="btn" href="#" id="reset">Reset</a></div>
+      <div id="note" class="hn-note">Don’t trust everything you see on <span class="hn">HN</span>.</div>
     </div>
     <div id="win">🎉 You collected all the apples!<br/>Press R to play again.</div>
     <div id="touch" class="touch">
@@ -49,7 +55,11 @@
 
   <script>
   (() => {
-    const canvas = document.getElementById('game');
+    // Utility: safe element lookup (avoids null crashes)
+    const $ = (id) => document.getElementById(id);
+    const requireEl = (id) => { const el = $(id); if (!el) console.error(`Missing #${id} in DOM`); return el; };
+
+    const canvas = requireEl('game');
     const ctx = canvas.getContext('2d');
 
     // Resize canvas to device pixels
@@ -87,18 +97,22 @@
       if (e.key === 'r' || e.key === 'R') { init(); }
     });
     addEventListener('keyup', e => { const k = keyMap[e.keyCode]; if (k) { keys[k] = false; e.preventDefault(); } });
-    document.getElementById('reset').onclick = (e) => { e.preventDefault(); init(); };
+
+    // Bind Reset safely (fixes null error if element missing)
+    const resetBtn = $('reset');
+    if (resetBtn) {
+      resetBtn.onclick = (e) => { e.preventDefault(); init(); };
+    }
 
     // Touch controls & on-screen buttons
-    const btnL = () => document.getElementById('btn-left');
-    const btnR = () => document.getElementById('btn-right');
-    const btnU = () => document.getElementById('btn-up');
+    const btnL = () => $('btn-left');
+    const btnR = () => $('btn-right');
+    const btnU = () => $('btn-up');
 
     function bindButton(el, key){
       if (!el) return;
       const on = (e)=>{ keys[key] = true; e.preventDefault(); };
       const off = (e)=>{ keys[key] = false; e.preventDefault(); };
-      
       el.addEventListener('mousedown', on);
       el.addEventListener('mouseup', off);
       el.addEventListener('mouseleave', off);
@@ -110,7 +124,7 @@
 
     // Late-bind after DOM is ready
     addEventListener('load', ()=>{
-      const wrap = document.getElementById('touch');
+      const wrap = $('touch');
       const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints>0);
       if (wrap) wrap.style.display = isTouch ? 'flex' : 'none';
 
@@ -170,6 +184,10 @@
         wrap.addEventListener('touchend',   handleEnd,   {passive:false});
         wrap.addEventListener('touchcancel',handleEnd,   {passive:false});
       }
+
+      // --- Self-test: ensure key UI elements exist (helps catch future DOM regressions) ---
+      const mustExist = ['score','total','antx','win','reset'];
+      for (const id of mustExist){ if (!$(id)) console.error(`[self-test] Missing #${id}`); }
     });
 
     // Entities
@@ -194,7 +212,7 @@
     function random(min, max) { return Math.random() * (max - min) + min; }
 
     function init() {
-      document.getElementById('win').style.display = 'none';
+      const winEl = $('win'); if (winEl) winEl.style.display = 'none';
 
       ant.x = 100; ant.vx = 0; ant.y = WORLD.groundY() - ant.h; ant.vy = 0; ant.onGround = true; ant.squash = 0;
       collected = 0;
@@ -228,7 +246,7 @@
         apples.push({ x, y, r: 10, collected: false, floatPhase: random(0, Math.PI*2) });
       }
 
-      document.getElementById('total').textContent = apples.length;
+      const totalEl = $('total'); if (totalEl) totalEl.textContent = apples.length;
     }
 
     // Drawing helpers
@@ -297,7 +315,6 @@
     }
 
     function drawAnt() {
-      const gY = WORLD.groundY();
       const x = ant.x - camera.x;
       const y = ant.y;
       // cull
@@ -417,8 +434,7 @@
         if (c.x - camera.x * 0.5 > WORLD.width + 200) c.x -= WORLD.width + 400;
       }
 
-      // Collect apples — if any part of the ant touches the apple
-      // Compute a facing-corrected ant hitbox centered on the sprite's visual center
+      // Collect apples — facing-aware, centered on the sprite
       // Sprite (unflipped) rough local bounds from drawAnt():
       //   X: [-24, +50]  → centerX ≈ +13, halfW ≈ 37
       //   Y: [-10, +26]  → centerY ≈ +8 (then translated by -15 in draw), halfH ≈ 18
@@ -446,13 +462,14 @@
       }
 
       // Win condition
-      if (collected === apples.length && apples.length > 0) {
-        document.getElementById('win').style.display = 'block';
+      const winEl = $('win');
+      if (collected === apples.length && apples.length > 0 && winEl) {
+        winEl.style.display = 'block';
       }
 
       // HUD
-      document.getElementById('score').textContent = collected;
-      document.getElementById('antx').textContent = Math.floor(ant.x);
+      const scoreEl = $('score'); if (scoreEl) scoreEl.textContent = collected;
+      const antxEl = $('antx'); if (antxEl) antxEl.textContent = Math.floor(ant.x);
     }
 
     function render() {
@@ -510,7 +527,7 @@
       ctx.closePath(); ctx.fill();
     }
 
-    // Main loop
+    // Main loop (delta-timed)
     let last = performance.now();
     function loop(){
       const now = performance.now();
