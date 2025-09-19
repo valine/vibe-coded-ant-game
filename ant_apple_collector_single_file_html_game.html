@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ant Apple Collector</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #87CEEB; /* sky */
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      overflow: hidden; /* prevent scroll when using arrows */
+    }
+    #ui {
+      position: fixed; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between;
+    }
+    #hud { margin: 12px; padding: 8px 12px; background: rgba(0,0,0,.35); color: #fff; border-radius: 10px; width: max-content; backdrop-filter: blur(4px); }
+    #help { margin: 12px; padding: 8px 12px; background: rgba(255,255,255,.6); color: #222; border-radius: 10px; width: max-content; align-self: flex-end; }
+    #win { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,.6); color: #fff; padding: 18px 22px; border-radius: 14px; font-size: 24px; display:none; text-align:center;}
+    canvas { display: block; width: 100vw; height: 100vh; }
+    a.btn { pointer-events: auto; display:inline-block; margin-left:8px; padding:4px 8px; border-radius:8px; background:#222; color:#fff; text-decoration:none; font-weight:600; }
+  .touch{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);display:none;gap:14px;pointer-events:auto;}
+    .touch button{width:64px;height:64px;border-radius:50%;border:none;background:rgba(0,0,0,.5);color:#fff;font-size:24px;box-shadow:0 4px 12px rgba(0,0,0,.25);backdrop-filter:blur(6px)}
+    @media (pointer: coarse){.touch{display:flex}}
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="ui">
+    <div id="hud">🍎 Apples: <span id="score">0</span>/<span id="total">0</span> &nbsp; | &nbsp; 🐜 Ant x: <span id="antx">0</span></div>
+    <div id="help">← → move &nbsp; • &nbsp; ↑ or Space to jump &nbsp; • &nbsp; R to restart &nbsp; • &nbsp; (mobile: ◀ ⤒ ▶) <a class="btn" href="#" id="reset">Reset</a></div>
+    <div id="win">🎉 You collected all the apples!<br/>Press R to play again.</div>
+    <div id="touch" class="touch">
+      <button id="btn-left" aria-label="Move left">◀</button>
+      <button id="btn-up" aria-label="Jump">⤒</button>
+      <button id="btn-right" aria-label="Move right">▶</button>
+    </div>
+  </div>
+
+  <script>
+  (() => {
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    // Resize canvas to device pixels
+    function fitCanvas() {
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      canvas.width  = Math.floor(innerWidth  * dpr);
+      canvas.height = Math.floor(innerHeight * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+    }
+    fitCanvas();
+    addEventListener('resize', fitCanvas);
+
+    // World parameters
+    const WORLD = {
+      width: 4000,    // total world length in px
+      groundY: () => Math.floor(innerHeight * 0.75),
+      gravity: 0.8,
+      friction: 0.85,
+      maxSpeed: 6,
+      jumpForce: 17,  // tune for "Mario-like" feel
+    };
+
+    // Camera
+    const camera = { x: 0 };
+
+    // Input
+    const keys = { left: false, right: false, up: false };
+    const keyMap = {
+      37: 'left', 39: 'right', 38: 'up', 32: 'up', // arrows + space
+      65: 'left', 68: 'right', 87: 'up' // WASD
+    };
+    addEventListener('keydown', e => {
+      const k = keyMap[e.keyCode];
+      if (k) { keys[k] = true; e.preventDefault(); }
+      if (e.key === 'r' || e.key === 'R') { init(); }
+    });
+    addEventListener('keyup', e => { const k = keyMap[e.keyCode]; if (k) { keys[k] = false; e.preventDefault(); } });
+    document.getElementById('reset').onclick = (e) => { e.preventDefault(); init(); };
+
+    // Touch controls & on-screen buttons
+    const btnL = () => document.getElementById('btn-left');
+    const btnR = () => document.getElementById('btn-right');
+    const btnU = () => document.getElementById('btn-up');
+
+    function bindButton(el, key){
+      if (!el) return;
+      const on = (e)=>{ keys[key] = true; e.preventDefault(); };
+      const off = (e)=>{ keys[key] = false; e.preventDefault(); };
+      el.addEventListener('touchstart', on, {passive:false});
+      el.addEventListener('touchend', off, {passive:false});
+      el.addEventListener('touchcancel', off, {passive:false});
+      el.addEventListener('mousedown', on);
+      el.addEventListener('mouseup', off);
+      el.addEventListener('mouseleave', off);
+    }
+
+    // Prevent page scrolling when touching the canvas/controls
+    canvas.addEventListener('touchstart', (e)=> e.preventDefault(), {passive:false});
+    canvas.addEventListener('touchmove',  (e)=> e.preventDefault(), {passive:false});
+
+    // Late-bind after DOM is ready
+    addEventListener('load', ()=>{
+      const wrap = document.getElementById('touch');
+      const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints>0);
+      if (wrap) wrap.style.display = isTouch ? 'flex' : 'none';
+      bindButton(btnL(), 'left');
+      bindButton(btnR(), 'right');
+      bindButton(btnU(), 'up');
+    });
+
+    // Entities
+    const ant = {
+      x: 100,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      w: 36,
+      h: 22,
+      onGround: false,
+      jumpCooldown: 0,
+      facing: 1,
+      squash: 0, // for landing squash & stretch
+    };
+
+    let clouds = []; // {x,y,scale,speed}
+    let trees = [];  // {x,height}
+    let apples = []; // {x,y,r,collected}
+    let collected = 0;
+
+    function random(min, max) { return Math.random() * (max - min) + min; }
+
+    function init() {
+      document.getElementById('win').style.display = 'none';
+
+      ant.x = 100; ant.vx = 0; ant.y = WORLD.groundY() - ant.h; ant.vy = 0; ant.onGround = true; ant.squash = 0;
+      collected = 0;
+
+      // Generate background elements
+      clouds = Array.from({length: 20}, () => ({
+        x: random(0, WORLD.width),
+        y: random(40, innerHeight * 0.4),
+        scale: random(0.6, 1.6),
+        speed: random(0.03, 0.12),
+      }));
+
+      trees = Array.from({length: 35}, () => ({
+        x: random(0, WORLD.width),
+        height: random(70, 160),
+      }));
+
+      // Place apples—some on ground, some floating
+      apples = [];
+      const total = 20;
+      // Compute a reachable max jump height from current physics
+      const maxJump = (WORLD.jumpForce * WORLD.jumpForce) / (2 * WORLD.gravity); // v^2/(2g)
+      const gY = WORLD.groundY();
+      // Keep floating apples within reachable band
+      const minFloatY = Math.max(gY - 160, gY - maxJump - 40);
+      const maxFloatY = gY - 90;
+      for (let i = 0; i < total; i++) {
+        const onGround = Math.random() < 0.6;
+        const x = random(120, WORLD.width - 80);
+        const y = onGround ? gY - 26 : random(minFloatY, maxFloatY);
+        apples.push({ x, y, r: 10, collected: false, floatPhase: random(0, Math.PI*2) });
+      }
+
+      document.getElementById('total').textContent = apples.length;
+    }
+
+    // Drawing helpers
+    function drawGround() {
+      const gY = WORLD.groundY();
+      // full-world ground strip so it never "runs out" when scrolling
+      ctx.fillStyle = '#4CAF50';
+      ctx.fillRect(-camera.x, gY, WORLD.width, innerHeight - gY);
+      // dirt line across the whole world length
+      ctx.fillStyle = '#3E8E41';
+      ctx.fillRect(-camera.x, gY - 12, WORLD.width, 12);
+    }
+
+    function drawCloud(c) {
+      const x = c.x - camera.x * 0.5; // parallax
+      if (x < -200 || x > innerWidth + 200) return;
+      ctx.save();
+      ctx.translate(x, c.y);
+      ctx.scale(c.scale, c.scale);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      roundedCloud(0,0, 80, 40);
+      ctx.restore();
+    }
+    function roundedCloud(x,y,w,h){
+      ctx.beginPath();
+      ctx.arc(x + w*0.2, y + h*0.6, h*0.45, Math.PI*0.5, Math.PI*1.5);
+      ctx.arc(x + w*0.5, y + h*0.5, h*0.55, Math.PI*1.0, Math.PI*2.0);
+      ctx.arc(x + w*0.8, y + h*0.6, h*0.40, Math.PI*1.5, Math.PI*0.5);
+      ctx.closePath(); ctx.fill();
+    }
+
+    function drawTree(t) {
+      const baseY = WORLD.groundY();
+      const x = t.x - camera.x;
+      if (x < -50 || x > innerWidth + 50) return;
+      // trunk
+      ctx.fillStyle = '#7B5A3A';
+      ctx.fillRect(x - 6, baseY - t.height, 12, t.height);
+      // canopy
+      ctx.fillStyle = '#2E8B57';
+      ctx.beginPath();
+      ctx.arc(x, baseY - t.height, 30, 0, Math.PI*2);
+      ctx.arc(x - 22, baseY - t.height + 14, 26, 0, Math.PI*2);
+      ctx.arc(x + 22, baseY - t.height + 14, 26, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    function drawApple(a) {
+      const x = a.x - camera.x;
+      if (x < -20 || x > innerWidth + 20) return;
+      // wobble
+      const bob = Math.sin(time*0.0018 + a.floatPhase) * 1.2;
+      ctx.save();
+      ctx.translate(x, a.y + bob);
+      // body
+      ctx.fillStyle = a.collected ? 'rgba(255,0,0,0.25)' : '#E53935';
+      ctx.beginPath();
+      ctx.arc(0, 0, a.r, 0, Math.PI*2); ctx.fill();
+      // highlight
+      ctx.fillStyle = 'rgba(255,255,255,.7)';
+      ctx.beginPath(); ctx.arc(-4, -4, 3, 0, Math.PI*2); ctx.fill();
+      // stem
+      ctx.strokeStyle = '#3E2723'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, -a.r); ctx.quadraticCurveTo(2, -a.r-6, 0, -a.r-10); ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawAnt() {
+      const gY = WORLD.groundY();
+      const x = ant.x - camera.x;
+      const y = ant.y;
+      // cull
+      if (x < -60 || x > innerWidth + 60) return;
+
+      ctx.save();
+      ctx.translate(x, y - 15);
+      // Art faces left by default; flip when moving right
+      ctx.scale(ant.facing === 1 ? -1 : 1, 1);
+
+      // squash & stretch effect
+      const squash = Math.max(0, ant.squash);
+      const sx = 1 + squash * 0.35;
+      const sy = 1 - squash * 0.35;
+      ctx.scale(sx, sy);
+
+      // body segments
+      ctx.fillStyle = '#2b2b2b';
+      roundedOval(-10, 0, 26, 18);   // head
+      roundedOval(12, 2, 28, 20);    // thorax
+      roundedOval(34, 4, 30, 22);    // abdomen
+
+      // eye
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(-4, -2, 2.3, 0, Math.PI*2); ctx.fill();
+
+      // legs (simple animated)
+      ctx.strokeStyle = '#1f1f1f'; ctx.lineWidth = 2;
+      const t = time * 0.0045;
+      for (let i = 0; i < 3; i++) {
+        const phase = i * 0.8;
+        const yOff = Math.sin(t + phase) * 1.1;
+        leg(8 + i*10, 12 + yOff, 6, 12);
+        leg(8 + i*10, 12 - yOff, 6, 12, true);
+      }
+
+      ctx.restore();
+
+      function leg(x, y, k1, k2, upper=false){
+        ctx.beginPath(); ctx.moveTo(x, y);
+        ctx.lineTo(x + (upper?-k1:k1), y + k1);
+        ctx.lineTo(x + (upper?-k1*2:k1*2), y + k1 + k2); ctx.stroke();
+      }
+
+      function roundedOval(cx, cy, w, h){
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, w/2, h/2, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Physics & update
+    let time = 0;
+    function update() {
+      time += 16.6667;
+      const gY = WORLD.groundY();
+
+      // Horizontal movement with acceleration
+      const accel = 0.8;
+      if (keys.left)  { ant.vx -= accel; ant.facing = -1; }
+      if (keys.right) { ant.vx += accel; ant.facing =  1; }
+      ant.vx = Math.max(-WORLD.maxSpeed, Math.min(WORLD.maxSpeed, ant.vx));
+      if (!keys.left && !keys.right) ant.vx *= WORLD.friction;
+
+      // Gravity
+      ant.vy += WORLD.gravity;
+
+      // Jump (Mario-like: coyote time + variable jump)
+      if (ant.onGround && (keys.up) && ant.jumpCooldown <= 0) {
+        ant.vy = -WORLD.jumpForce;
+        ant.onGround = false;
+        ant.jumpCooldown = 10; // avoid auto-retrigger
+      }
+      ant.jumpCooldown = Math.max(0, ant.jumpCooldown - 1);
+
+      // Variable jump height: if player releases early, cut upward velocity
+      // Mimics classic platformers
+      if (!keys.up && ant.vy < -4) ant.vy = -4;
+
+      // Integrate
+      ant.x += ant.vx;
+      ant.y += ant.vy;
+
+      // World bounds
+      ant.x = Math.max(20, Math.min(WORLD.width - 20, ant.x));
+
+      // Ground collision
+      const groundTop = gY - ant.h;
+      if (ant.y >= groundTop) {
+        if (!ant.onGround && ant.vy > 3) { // landing impact
+          ant.squash = Math.min(0.6, Math.abs(ant.vy) / 24);
+        }
+        ant.y = groundTop; ant.vy = 0; ant.onGround = true;
+      } else {
+        ant.onGround = false;
+      }
+
+      // Decay squash
+      ant.squash *= 0.8;
+
+      // Camera follow
+      const centerX = ant.x - innerWidth * 0.5 + 40 * ant.facing;
+      camera.x += (centerX - camera.x) * 0.06;
+      camera.x = Math.max(0, Math.min(WORLD.width - innerWidth, camera.x));
+
+      // Move clouds slowly
+      for (const c of clouds) {
+        c.x += c.speed;
+        if (c.x - camera.x * 0.5 > WORLD.width + 200) c.x -= WORLD.width + 400;
+      }
+
+      // Collect apples (circle-rect approx with ant body)
+      for (const a of apples) {
+        if (a.collected) continue;
+        const dx = (ant.x + 20) - a.x;
+        const dy = (ant.y + ant.h/2) - a.y;
+        const rad = (a.r + 8); // slightly larger hitbox than the visual radius
+        if (dx*dx + dy*dy < rad*rad) {
+          a.collected = true; collected += 1; ant.squash = 0.3;
+        }
+      }
+
+      // Win condition
+      if (collected === apples.length && apples.length > 0) {
+        document.getElementById('win').style.display = 'block';
+      }
+
+      // HUD
+      document.getElementById('score').textContent = collected;
+      document.getElementById('antx').textContent = Math.floor(ant.x);
+    }
+
+    function render() {
+      // sky
+      ctx.clearRect(0, 0, innerWidth, innerHeight);
+
+      // distant hills (parallax background)
+      ctx.fillStyle = '#9ad18b';
+      parallaxHill(0.2, 60, 1);
+      ctx.fillStyle = '#7cc37a';
+      parallaxHill(0.35, 100, 2);
+
+      // clouds
+      for (const c of clouds) drawCloud(c);
+
+      // trees
+      for (const t of trees) drawTree(t);
+
+      // ground
+      drawGround();
+
+      // apples
+      for (const a of apples) drawApple(a);
+
+      // ant
+      drawAnt();
+    }
+
+    function noise(i, s){
+      const x = Math.sin((i * 127.1 + s * 311.7)) * 43758.5453123;
+      return x - Math.floor(x);
+    }
+
+    function parallaxHill(factor, h, seed) {
+      const yBase = WORLD.groundY() - 30 - h;
+      const step = 200;
+      ctx.beginPath();
+      ctx.moveTo(-200, innerHeight);
+      const start = Math.floor((camera.x * factor - 200) / step) - 2;
+      const end   = Math.floor((camera.x * factor + innerWidth + 400) / step) + 2;
+      let first = true;
+      for (let i = start; i <= end; i++) {
+        const x = i * step - camera.x * factor;
+        const y = yBase - (noise(i, seed) - 0.5) * 40; // stable, no flicker
+        if (first) {
+          ctx.lineTo(x, y);
+          first = false;
+        } else {
+          const cx = x - step * 0.5;
+          const cy = yBase - (noise(i - 0.5, seed) - 0.5) * 40;
+          ctx.quadraticCurveTo(cx, cy, x, y);
+        }
+      }
+      ctx.lineTo(innerWidth + 400, innerHeight);
+      ctx.closePath(); ctx.fill();
+    }
+
+    // Main loop
+    function loop(){
+      update();
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    init();
+    loop();
+  })();
+  </script>
+</body>
+</html>
